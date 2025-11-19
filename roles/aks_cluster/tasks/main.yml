@@ -1,0 +1,216 @@
+---
+# Tasks for deploying AKS cluster
+
+- name: Verify required variables are defined
+  ansible.builtin.assert:
+    that:
+      - aks_cluster_name is defined
+      - aks_resource_group is defined
+      - aks_location is defined
+      - aks_vm_size is defined
+    fail_msg: "Required AKS variables are not defined"
+
+- name: Check if Azure CLI is installed
+  ansible.builtin.command: which az
+  register: az_cli_check
+  failed_when: az_cli_check.rc != 0
+  changed_when: false
+
+- name: Verify Azure login
+  ansible.builtin.command: az account show
+  register: az_account
+  changed_when: false
+  failed_when: az_account.rc != 0
+
+- name: Display Azure account information
+  ansible.builtin.debug:
+    msg: "Using Azure Subscription: {{ (az_account.stdout | from_json).name }} ({{ (az_account.stdout | from_json).id }})"
+
+- name: Set Azure subscription (if specified)
+  when: azure_subscription_id is defined and azure_subscription_id != ''
+  ansible.builtin.command: az account set --subscription {{ azure_subscription_id }}
+  changed_when: true
+
+- name: Create Azure resource group
+  when: aks_state == 'present'
+  azure.azcollection.azure_rm_resourcegroup:
+    name: "{{ aks_resource_group }}"
+    location: "{{ aks_location }}"
+    tags: "{{ aks_tags | default({}) }}"
+    state: present
+
+- name: Check if AKS cluster exists
+  ansible.builtin.command: >
+    az aks show
+    --name {{ aks_cluster_name }}
+    --resource-group {{ aks_resource_group }}
+  register: aks_cluster_check
+  failed_when: false
+  changed_when: false
+
+- name: Deploy AKS cluster
+  when: aks_cluster_check.rc != 0 and aks_state == 'present'
+  block:
+    - name: Build AKS create command
+      ansible.builtin.set_fact:
+        aks_create_cmd: >-
+          az aks create
+          --name {{ aks_cluster_name }}
+          --resource-group {{ aks_resource_group }}
+          --location {{ aks_location }}
+          --kubernetes-version {{ aks_kubernetes_version }}
+          --node-count {{ aks_node_count }}
+          --node-vm-size {{ aks_vm_size }}
+          --node-osdisk-size {{ aks_os_disk_size_gb }}
+          --network-plugin {{ aks_network_plugin }}
+          {% if aks_network_policy is defined and aks_network_policy != '' %}--network-policy {{ aks_network_policy }}{% endif %}
+          {% if aks_service_cidr is defined and aks_service_cidr != '' %}--service-cidr {{ aks_service_cidr }}{% endif %}
+          {% if aks_dns_service_ip is defined and aks_dns_service_ip != '' %}--dns-service-ip {{ aks_dns_service_ip }}{% endif %}
+          {% if aks_docker_bridge_cidr is defined and aks_docker_bridge_cidr != '' %}--docker-bridge-address {{ aks_docker_bridge_cidr }}{% endif %}
+          --load-balancer-sku {{ aks_load_balancer_sku }}
+          {% if aks_enable_rbac %}--enable-rbac{% endif %}
+          {% if aks_enable_azure_rbac %}--enable-azure-rbac{% endif %}
+          {% if aks_enable_managed_identity %}--enable-managed-identity{% endif %}
+          {% if aks_enable_auto_scaling %}
+          --enable-cluster-autoscaler
+          --min-count {{ aks_min_node_count }}
+          --max-count {{ aks_max_node_count }}
+          {% endif %}
+          {% if aks_enable_monitoring %}--enable-addons monitoring{% endif %}
+          {% if aks_enable_azure_policy %}--enable-azure-policy{% endif %}
+          --nodepool-name {{ aks_node_pool_name }}
+          --generate-ssh-keys
+          --tags {% for key, value in aks_tags.items() %}{{ key }}={{ value }} {% endfor %}
+          --yes
+
+    - name: Display AKS create command
+      ansible.builtin.debug:
+        msg: "{{ aks_create_cmd }}"
+
+    - name: Create AKS cluster (this may take 10-15 minutes)
+      ansible.builtin.command: "{{ aks_create_cmd }}"
+      register: aks_create_result
+      async: 3600  # 1 hour
+      poll: 0
+      changed_when: true
+
+    - name: Wait for AKS cluster creation
+      when: aks_wait
+      ansible.builtin.async_status:
+        jid: "{{ aks_create_result.ansible_job_id }}"
+      register: aks_create_job
+      until: aks_create_job.finished
+      retries: 120
+      delay: 30
+
+- name: Update AKS cluster (if exists and present)
+  when: aks_cluster_check.rc == 0 and aks_state == 'present'
+  block:
+    - name: Get current AKS cluster details
+      ansible.builtin.command: >
+        az aks show
+        --name {{ aks_cluster_name }}
+        --resource-group {{ aks_resource_group }}
+        -o json
+      register: current_aks_info
+      changed_when: false
+
+    - name: Update node count if autoscaling not enabled
+      when: not aks_enable_auto_scaling
+      ansible.builtin.command: >
+        az aks scale
+        --name {{ aks_cluster_name }}
+        --resource-group {{ aks_resource_group }}
+        --node-count {{ aks_node_count }}
+        --nodepool-name {{ aks_node_pool_name }}
+      register: aks_scale_result
+      changed_when: "'Running' in aks_scale_result.stdout"
+      failed_when: false
+
+- name: Get AKS cluster details
+  when: aks_state == 'present'
+  ansible.builtin.command: >
+    az aks show
+    --name {{ aks_cluster_name }}
+    --resource-group {{ aks_resource_group }}
+    -o json
+  register: aks_cluster_info
+  changed_when: false
+
+- name: Display AKS cluster information
+  when: aks_state == 'present' and aks_cluster_info.rc == 0
+  ansible.builtin.debug:
+    msg:
+      - "Cluster Name: {{ (aks_cluster_info.stdout | from_json).name }}"
+      - "Provisioning State: {{ (aks_cluster_info.stdout | from_json).provisioningState }}"
+      - "Kubernetes Version: {{ (aks_cluster_info.stdout | from_json).kubernetesVersion }}"
+      - "FQDN: {{ (aks_cluster_info.stdout | from_json).fqdn }}"
+      - "Node Resource Group: {{ (aks_cluster_info.stdout | from_json).nodeResourceGroup }}"
+
+- name: Get AKS cluster credentials
+  when: aks_state == 'present' and aks_get_credentials
+  ansible.builtin.command: >
+    az aks get-credentials
+    --name {{ aks_cluster_name }}
+    --resource-group {{ aks_resource_group }}
+    --overwrite-existing
+  register: aks_credentials
+  changed_when: "'Merged' in aks_credentials.stderr"
+
+- name: Verify cluster connectivity
+  when: aks_state == 'present' and aks_get_credentials
+  ansible.builtin.command: kubectl cluster-info
+  register: k8s_cluster_info
+  changed_when: false
+  failed_when: false
+
+- name: Display cluster connectivity
+  when: k8s_cluster_info is defined and k8s_cluster_info.rc == 0
+  ansible.builtin.debug:
+    msg: "{{ k8s_cluster_info.stdout_lines }}"
+
+- name: Delete AKS cluster
+  when: aks_state == 'absent' and aks_cluster_check.rc == 0
+  block:
+    - name: Delete the AKS cluster
+      ansible.builtin.command: >
+        az aks delete
+        --name {{ aks_cluster_name }}
+        --resource-group {{ aks_resource_group }}
+        --yes
+        --no-wait
+      register: aks_delete_result
+      changed_when: true
+
+    - name: Wait for cluster deletion
+      when: aks_wait
+      ansible.builtin.command: >
+        az aks show
+        --name {{ aks_cluster_name }}
+        --resource-group {{ aks_resource_group }}
+      register: aks_delete_check
+      until: aks_delete_check.rc != 0
+      retries: 60
+      delay: 30
+      failed_when: false
+      changed_when: false
+
+- name: Delete resource group
+  when: aks_state == 'absent'
+  ansible.builtin.command: >
+    az group delete
+    --name {{ aks_resource_group }}
+    --yes
+    --no-wait
+  register: rg_delete
+  failed_when: false
+  changed_when: true
+
+- name: Save cluster information to file
+  when: aks_state == 'present' and aks_cluster_info.rc == 0
+  ansible.builtin.copy:
+    content: "{{ aks_cluster_info.stdout | from_json | to_nice_json }}"
+    dest: "./aks_cluster_{{ aks_cluster_name }}_info.json"
+    mode: '0644'
+  delegate_to: localhost
+

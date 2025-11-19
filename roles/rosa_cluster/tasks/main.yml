@@ -1,0 +1,161 @@
+---
+# Tasks for deploying ROSA cluster
+
+- name: Verify required variables are defined
+  ansible.builtin.assert:
+    that:
+      - rosa_cluster_name is defined
+      - rosa_region is defined
+      - rosa_compute_machine_type is defined
+    fail_msg: "Required ROSA variables are not defined"
+
+- name: Check if ROSA CLI is installed
+  ansible.builtin.command: which rosa
+  register: rosa_cli_check
+  failed_when: false
+  changed_when: false
+
+- name: Install ROSA CLI if not present
+  when: rosa_cli_check.rc != 0
+  block:
+    - name: Download ROSA CLI
+      ansible.builtin.get_url:
+        url: "https://mirror.openshift.com/pub/openshift-v4/clients/rosa/latest/rosa-linux.tar.gz"
+        dest: "/tmp/rosa-linux.tar.gz"
+        mode: '0644'
+
+    - name: Extract ROSA CLI
+      ansible.builtin.unarchive:
+        src: "/tmp/rosa-linux.tar.gz"
+        dest: "/tmp/"
+        remote_src: true
+
+    - name: Move ROSA CLI to bin directory
+      ansible.builtin.copy:
+        src: "/tmp/rosa"
+        dest: "{{ rosa_cli_install_path }}/rosa"
+        mode: '0755'
+        remote_src: true
+      become: true
+
+- name: Verify AWS credentials are configured
+  ansible.builtin.command: aws sts get-caller-identity --profile {{ aws_profile | default('default') }}
+  register: aws_identity
+  changed_when: false
+  failed_when: aws_identity.rc != 0
+
+- name: Display AWS identity
+  ansible.builtin.debug:
+    msg: "Using AWS Account: {{ (aws_identity.stdout | from_json).Account }}"
+
+- name: Log in to ROSA
+  ansible.builtin.command: >
+    rosa login
+    {% if lookup('env', 'ROSA_TOKEN') %}--token={{ lookup('env', 'ROSA_TOKEN') }}{% endif %}
+  register: rosa_login
+  changed_when: "'Logged in' in rosa_login.stdout"
+  failed_when: rosa_login.rc != 0
+
+- name: Check if ROSA cluster already exists
+  ansible.builtin.command: rosa describe cluster --cluster={{ rosa_cluster_name }}
+  register: rosa_cluster_check
+  failed_when: false
+  changed_when: false
+
+- name: Deploy ROSA cluster
+  when: rosa_cluster_check.rc != 0 and rosa_state == 'present'
+  block:
+    - name: Build ROSA create cluster command
+      ansible.builtin.set_fact:
+        rosa_create_cmd: >-
+          rosa create cluster
+          --cluster-name={{ rosa_cluster_name }}
+          --region={{ rosa_region }}
+          --version={{ rosa_cluster_version }}
+          --compute-machine-type={{ rosa_compute_machine_type }}
+          --replicas={{ rosa_compute_nodes }}
+          {% if rosa_multi_az %}--multi-az{% endif %}
+          {% if rosa_enable_autoscaling %}
+          --enable-autoscaling
+          --min-replicas={{ rosa_compute_nodes_min }}
+          --max-replicas={{ rosa_compute_nodes_max }}
+          {% endif %}
+          {% if rosa_sts_mode %}--sts{% endif %}
+          {% if not rosa_private %}--public{% else %}--private{% endif %}
+          {% if rosa_subnet_ids | length > 0 %}--subnet-ids={{ rosa_subnet_ids | join(',') }}{% endif %}
+          --mode=auto
+          --yes
+
+    - name: Display ROSA create command
+      ansible.builtin.debug:
+        msg: "{{ rosa_create_cmd }}"
+
+    - name: Create ROSA cluster
+      ansible.builtin.command: "{{ rosa_create_cmd }}"
+      register: rosa_create_result
+      async: 7200  # 2 hours
+      poll: 0
+
+    - name: Wait for ROSA cluster creation to complete
+      when: rosa_wait
+      ansible.builtin.command: rosa describe cluster --cluster={{ rosa_cluster_name }} -o json
+      register: rosa_status
+      until: (rosa_status.stdout | from_json).state == 'ready'
+      retries: "{{ (rosa_wait_timeout / 60) | int }}"
+      delay: 60
+      changed_when: false
+
+- name: Get ROSA cluster details
+  when: rosa_state == 'present'
+  ansible.builtin.command: rosa describe cluster --cluster={{ rosa_cluster_name }} -o json
+  register: rosa_cluster_info
+  changed_when: false
+
+- name: Display ROSA cluster information
+  when: rosa_state == 'present' and rosa_cluster_info.rc == 0
+  ansible.builtin.debug:
+    msg:
+      - "Cluster Name: {{ (rosa_cluster_info.stdout | from_json).name }}"
+      - "Cluster State: {{ (rosa_cluster_info.stdout | from_json).state }}"
+      - "API URL: {{ (rosa_cluster_info.stdout | from_json).api.url }}"
+      - "Console URL: {{ (rosa_cluster_info.stdout | from_json).console.url }}"
+
+- name: Create cluster admin user
+  when: rosa_state == 'present' and rosa_cluster_info.rc == 0
+  ansible.builtin.command: >
+    rosa create admin --cluster={{ rosa_cluster_name }}
+  register: rosa_admin_create
+  failed_when: false
+  changed_when: "'Admin account has been added' in rosa_admin_create.stdout"
+
+- name: Display admin credentials
+  when: rosa_admin_create is defined and rosa_admin_create.changed
+  ansible.builtin.debug:
+    msg: "{{ rosa_admin_create.stdout_lines }}"
+
+- name: Delete ROSA cluster
+  when: rosa_state == 'absent' and rosa_cluster_check.rc == 0
+  block:
+    - name: Delete the ROSA cluster
+      ansible.builtin.command: >
+        rosa delete cluster --cluster={{ rosa_cluster_name }} --yes
+      register: rosa_delete_result
+
+    - name: Wait for cluster deletion
+      when: rosa_wait
+      ansible.builtin.command: rosa describe cluster --cluster={{ rosa_cluster_name }}
+      register: rosa_delete_check
+      until: rosa_delete_check.rc != 0
+      retries: "{{ (rosa_wait_timeout / 60) | int }}"
+      delay: 60
+      failed_when: false
+      changed_when: false
+
+- name: Save cluster information to file
+  when: rosa_state == 'present' and rosa_cluster_info.rc == 0
+  ansible.builtin.copy:
+    content: "{{ rosa_cluster_info.stdout | from_json | to_nice_json }}"
+    dest: "./rosa_cluster_{{ rosa_cluster_name }}_info.json"
+    mode: '0644'
+  delegate_to: localhost
+

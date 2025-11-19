@@ -1,0 +1,79 @@
+---
+# Playbook to deploy AKS (Azure Kubernetes Service) cluster
+#
+# Usage:
+#   ansible-playbook -i inventory/azure playbooks/deploy_aks.yml
+#
+# To delete:
+#   ansible-playbook -i inventory/azure playbooks/deploy_aks.yml -e "aks_state=absent"
+
+- name: Deploy AKS Cluster on Azure
+  hosts: aks
+  gather_facts: true
+  
+  pre_tasks:
+    - name: Display playbook information
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - "AKS Cluster Deployment"
+          - "=========================================="
+          - "Cluster Name: {{ aks_cluster_name }}"
+          - "Resource Group: {{ aks_resource_group }}"
+          - "Location: {{ aks_location }}"
+          - "State: {{ aks_state | default('present') }}"
+          - "=========================================="
+
+    - name: Check prerequisites
+      ansible.builtin.command: "{{ item }}"
+      loop:
+        - "az --version"
+        - "python3 --version"
+      register: prereq_check
+      changed_when: false
+      failed_when: prereq_check.rc != 0
+
+    - name: Check for kubectl
+      ansible.builtin.command: which kubectl
+      register: kubectl_check
+      changed_when: false
+      failed_when: false
+
+    - name: Install kubectl if not present
+      when: kubectl_check.rc != 0
+      ansible.builtin.command: az aks install-cli
+      register: kubectl_install
+      changed_when: true
+      failed_when: false
+      become: true
+
+  roles:
+    - role: aks_cluster
+      tags:
+        - aks
+        - cluster
+        - azure
+
+  post_tasks:
+    - name: Display completion message
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - "AKS Cluster deployment completed!"
+          - "=========================================="
+          - "Next steps:"
+          - "1. Verify cluster: kubectl get nodes"
+          - "2. Check cluster info: kubectl cluster-info"
+          - "3. View services: kubectl get svc --all-namespaces"
+          - "4. Azure Portal: https://portal.azure.com"
+          - "=========================================="
+      when: aks_state | default('present') == 'present'
+
+    - name: Display deletion message
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - "AKS Cluster deletion initiated!"
+          - "=========================================="
+      when: aks_state | default('present') == 'absent'
+

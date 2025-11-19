@@ -1,0 +1,57 @@
+---
+# AKS Cluster Configuration Variables
+
+# Cluster Basic Settings
+aks_cluster_name: "obs-aks-cluster"
+aks_resource_group: "obs-aks-rg"
+aks_location: "eastus"
+aks_kubernetes_version: "1.28"
+
+# Node Pool Configuration
+aks_node_pool_name: "default"
+aks_node_count: 3
+aks_min_node_count: 3
+aks_max_node_count: 6
+aks_vm_size: "Standard_D4s_v3"
+aks_os_disk_size_gb: 128
+
+# Networking
+aks_network_plugin: "azure"  # or 'kubenet'
+aks_network_policy: "azure"  # or 'calico'
+aks_dns_service_ip: "10.0.0.10"
+aks_docker_bridge_cidr: "172.17.0.1/16"
+aks_service_cidr: "10.0.0.0/16"
+aks_load_balancer_sku: "standard"
+
+# Authentication & Authorization
+aks_enable_rbac: true
+aks_enable_azure_rbac: true
+aks_enable_managed_identity: true
+
+# Features
+aks_enable_auto_scaling: true
+aks_enable_cluster_autoscaler: true
+aks_enable_monitoring: true
+aks_enable_pod_security_policy: false
+
+# Azure Configuration
+azure_subscription_id: ""  # Set via environment or override
+azure_tenant_id: ""        # Set via environment or override
+
+# Tags
+aks_tags:
+  Environment: "observability"
+  Project: "obs-iac"
+  ManagedBy: "ansible"
+
+# Add-ons
+aks_enable_http_application_routing: false
+aks_enable_azure_policy: true
+
+# Network Profile (optional - for advanced networking)
+aks_vnet_name: ""
+aks_subnet_name: ""
+
+# Timeout settings (in minutes)
+aks_deployment_timeout: 30
+

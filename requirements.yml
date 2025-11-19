@@ -1,0 +1,12 @@
+---
+# Ansible Galaxy requirements
+collections:
+  - name: amazon.aws
+    version: ">=6.0.0"
+  - name: azure.azcollection
+    version: ">=1.16.0"
+  - name: kubernetes.core
+    version: ">=2.4.0"
+  - name: community.general
+    version: ">=7.0.0"
+

@@ -1,0 +1,13 @@
+---
+# Default variables for AKS cluster role
+aks_state: "present"  # present or absent
+aks_wait: true
+
+# Validation
+aks_validate_quota: true
+aks_dry_run: false
+
+# Kubeconfig
+aks_kubeconfig_path: "~/.kube"
+aks_get_credentials: true
+

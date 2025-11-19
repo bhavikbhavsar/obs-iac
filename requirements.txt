@@ -1,0 +1,23 @@
+# Python requirements for Ansible and cloud providers
+ansible>=8.0.0
+
+# AWS/ROSA dependencies
+boto3>=1.26.0
+botocore>=1.29.0
+
+# Azure/AKS dependencies (for Ansible azure.azcollection)
+# Note: Install Azure CLI separately: https://docs.microsoft.com/cli/azure/install-azure-cli
+azure-identity>=1.13.0
+azure-mgmt-containerservice>=20.0.0
+azure-mgmt-resource>=23.0.0
+azure-mgmt-network>=21.0.0
+azure-mgmt-compute>=30.0.0
+
+# Kubernetes/OpenShift clients
+openshift>=0.13.0
+kubernetes>=26.1.0
+
+# Utilities
+jmespath>=1.0.1
+PyYAML>=6.0
+

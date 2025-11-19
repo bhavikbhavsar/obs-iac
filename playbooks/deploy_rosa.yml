@@ -1,0 +1,63 @@
+---
+# Playbook to deploy ROSA (Red Hat OpenShift Service on AWS) cluster
+#
+# Usage:
+#   ansible-playbook -i inventory/aws playbooks/deploy_rosa.yml
+#
+# To delete:
+#   ansible-playbook -i inventory/aws playbooks/deploy_rosa.yml -e "rosa_state=absent"
+
+- name: Deploy ROSA Cluster on AWS
+  hosts: rosa
+  gather_facts: true
+  
+  pre_tasks:
+    - name: Display playbook information
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - "ROSA Cluster Deployment"
+          - "=========================================="
+          - "Cluster Name: {{ rosa_cluster_name }}"
+          - "Region: {{ rosa_region }}"
+          - "State: {{ rosa_state | default('present') }}"
+          - "=========================================="
+
+    - name: Check prerequisites
+      ansible.builtin.command: "{{ item }}"
+      loop:
+        - "aws --version"
+        - "python3 --version"
+      register: prereq_check
+      changed_when: false
+      failed_when: prereq_check.rc != 0
+
+  roles:
+    - role: rosa_cluster
+      tags:
+        - rosa
+        - cluster
+        - aws
+
+  post_tasks:
+    - name: Display completion message
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - "ROSA Cluster deployment completed!"
+          - "=========================================="
+          - "Next steps:"
+          - "1. Check cluster status: rosa describe cluster --cluster={{ rosa_cluster_name }}"
+          - "2. Get admin credentials: rosa create admin --cluster={{ rosa_cluster_name }}"
+          - "3. Access console: rosa describe cluster --cluster={{ rosa_cluster_name }} | grep Console"
+          - "=========================================="
+      when: rosa_state | default('present') == 'present'
+
+    - name: Display deletion message
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - "ROSA Cluster deletion initiated!"
+          - "=========================================="
+      when: rosa_state | default('present') == 'absent'
+

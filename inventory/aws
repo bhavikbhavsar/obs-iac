@@ -1,0 +1,7 @@
+[rosa]
+localhost ansible_connection=local
+
+[rosa:vars]
+ansible_python_interpreter=python3
+cloud_provider=aws
+
