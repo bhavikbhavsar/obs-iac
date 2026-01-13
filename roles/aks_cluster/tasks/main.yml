@@ -16,6 +16,31 @@
   failed_when: az_cli_check.rc != 0
   changed_when: false
 
+- name: Read credentials from ~/.azure/credentials file
+  when: azure_profile is defined and azure_profile != ''
+  ansible.builtin.set_fact:
+    azure_client_id: "{{ lookup('ini', 'client_id section=' + azure_profile + ' file=~/.azure/credentials') }}"
+    azure_client_secret: "{{ lookup('ini', 'secret section=' + azure_profile + ' file=~/.azure/credentials') }}"
+    azure_tenant_id: "{{ lookup('ini', 'tenant section=' + azure_profile + ' file=~/.azure/credentials') }}"
+    azure_subscription_id: "{{ azure_subscription_id | default(lookup('ini', 'subscription_id section=' + azure_profile + ' file=~/.azure/credentials')) }}"
+  no_log: true
+
+- name: Login to Azure using service principal
+  when: azure_profile is defined and azure_profile != ''
+  ansible.builtin.command: >
+    az login --service-principal
+    --username {{ azure_client_id }}
+    --password {{ azure_client_secret }}
+    --tenant {{ azure_tenant_id }}
+  register: az_sp_login
+  changed_when: true
+  no_log: true
+
+- name: Set Azure subscription (if specified)
+  when: azure_subscription_id is defined and azure_subscription_id != ''
+  ansible.builtin.command: az account set --subscription {{ azure_subscription_id }}
+  changed_when: true
+
 - name: Verify Azure login
   ansible.builtin.command: az account show
   register: az_account
@@ -26,17 +51,13 @@
   ansible.builtin.debug:
     msg: "Using Azure Subscription: {{ (az_account.stdout | from_json).name }} ({{ (az_account.stdout | from_json).id }})"
 
-- name: Set Azure subscription (if specified)
-  when: azure_subscription_id is defined and azure_subscription_id != ''
-  ansible.builtin.command: az account set --subscription {{ azure_subscription_id }}
-  changed_when: true
-
 - name: Create Azure resource group
   when: aks_state == 'present'
   azure.azcollection.azure_rm_resourcegroup:
     name: "{{ aks_resource_group }}"
     location: "{{ aks_location }}"
     tags: "{{ aks_tags | default({}) }}"
+    profile: "{{ azure_profile | default(omit) }}"
     state: present
 
 - name: Check if AKS cluster exists
@@ -44,6 +65,7 @@
     az aks show
     --name {{ aks_cluster_name }}
     --resource-group {{ aks_resource_group }}
+    {{ '--subscription ' + azure_subscription_id if azure_subscription_id is defined and azure_subscription_id != '' else '' }}
   register: aks_cluster_check
   failed_when: false
   changed_when: false
@@ -58,6 +80,7 @@
           --name {{ aks_cluster_name }}
           --resource-group {{ aks_resource_group }}
           --location {{ aks_location }}
+          {% if azure_subscription_id is defined and azure_subscription_id != '' %}--subscription {{ azure_subscription_id }}{% endif %}
           --kubernetes-version {{ aks_kubernetes_version }}
           --node-count {{ aks_node_count }}
           --node-vm-size {{ aks_vm_size }}
@@ -68,8 +91,8 @@
           {% if aks_dns_service_ip is defined and aks_dns_service_ip != '' %}--dns-service-ip {{ aks_dns_service_ip }}{% endif %}
           {% if aks_docker_bridge_cidr is defined and aks_docker_bridge_cidr != '' %}--docker-bridge-address {{ aks_docker_bridge_cidr }}{% endif %}
           --load-balancer-sku {{ aks_load_balancer_sku }}
-          {% if aks_enable_rbac %}--enable-rbac{% endif %}
-          {% if aks_enable_azure_rbac %}--enable-azure-rbac{% endif %}
+          {% if aks_enable_azure_rbac %}--enable-aad --enable-azure-rbac{% endif %}
+          {% if aks_aad_admin_group_id is defined and aks_aad_admin_group_id != '' %}--aad-admin-group-object-ids {{ aks_aad_admin_group_id }}{% endif %}
           {% if aks_enable_managed_identity %}--enable-managed-identity{% endif %}
           {% if aks_enable_auto_scaling %}
           --enable-cluster-autoscaler
@@ -77,7 +100,6 @@
           --max-count {{ aks_max_node_count }}
           {% endif %}
           {% if aks_enable_monitoring %}--enable-addons monitoring{% endif %}
-          {% if aks_enable_azure_policy %}--enable-azure-policy{% endif %}
           --nodepool-name {{ aks_node_pool_name }}
           --generate-ssh-keys
           --tags {% for key, value in aks_tags.items() %}{{ key }}={{ value }} {% endfor %}
@@ -111,6 +133,7 @@
         az aks show
         --name {{ aks_cluster_name }}
         --resource-group {{ aks_resource_group }}
+        {{ '--subscription ' + azure_subscription_id if azure_subscription_id is defined and azure_subscription_id != '' else '' }}
         -o json
       register: current_aks_info
       changed_when: false
@@ -121,6 +144,7 @@
         az aks scale
         --name {{ aks_cluster_name }}
         --resource-group {{ aks_resource_group }}
+        {{ '--subscription ' + azure_subscription_id if azure_subscription_id is defined and azure_subscription_id != '' else '' }}
         --node-count {{ aks_node_count }}
         --nodepool-name {{ aks_node_pool_name }}
       register: aks_scale_result
@@ -133,6 +157,7 @@
     az aks show
     --name {{ aks_cluster_name }}
     --resource-group {{ aks_resource_group }}
+    {{ '--subscription ' + azure_subscription_id if azure_subscription_id is defined and azure_subscription_id != '' else '' }}
     -o json
   register: aks_cluster_info
   changed_when: false
@@ -147,12 +172,76 @@
       - "FQDN: {{ (aks_cluster_info.stdout | from_json).fqdn }}"
       - "Node Resource Group: {{ (aks_cluster_info.stdout | from_json).nodeResourceGroup }}"
 
+# Grant Azure RBAC permissions to admin group on resource groups
+- name: Grant admin group Contributor access on main resource group
+  when:
+    - aks_state == 'present'
+    - aks_grant_group_rbac | default(false)
+    - aks_aad_admin_group_id is defined and aks_aad_admin_group_id != ''
+  ansible.builtin.command: >
+    az role assignment create
+    --assignee-object-id {{ aks_aad_admin_group_id }}
+    --assignee-principal-type Group
+    --role "Contributor"
+    --scope "/subscriptions/{{ azure_subscription_id }}/resourceGroups/{{ aks_resource_group }}"
+  register: rbac_main_rg
+  changed_when: rbac_main_rg.rc == 0
+  failed_when: false
+
+- name: Grant admin group Reader access on AKS managed node resource group
+  when:
+    - aks_state == 'present'
+    - aks_grant_group_rbac | default(false)
+    - aks_aad_admin_group_id is defined and aks_aad_admin_group_id != ''
+    - aks_cluster_info.rc == 0
+  vars:
+    node_resource_group: "{{ (aks_cluster_info.stdout | from_json).nodeResourceGroup }}"
+  ansible.builtin.command: >
+    az role assignment create
+    --assignee-object-id {{ aks_aad_admin_group_id }}
+    --assignee-principal-type Group
+    --role "Reader"
+    --scope "/subscriptions/{{ azure_subscription_id }}/resourceGroups/{{ node_resource_group }}"
+  register: rbac_node_rg
+  changed_when: rbac_node_rg.rc == 0
+  failed_when: false
+
+- name: Grant admin group AKS Cluster Admin role on cluster
+  when:
+    - aks_state == 'present'
+    - aks_grant_group_rbac | default(false)
+    - aks_aad_admin_group_id is defined and aks_aad_admin_group_id != ''
+  vars:
+    aks_scope: "/subscriptions/{{ azure_subscription_id }}/resourceGroups/{{ aks_resource_group }}"
+  ansible.builtin.command: >
+    az role assignment create
+    --assignee-object-id {{ aks_aad_admin_group_id }}
+    --assignee-principal-type Group
+    --role "Azure Kubernetes Service RBAC Cluster Admin"
+    --scope "{{ aks_scope }}/providers/Microsoft.ContainerService/managedClusters/{{ aks_cluster_name }}"
+  register: rbac_aks_admin
+  changed_when: rbac_aks_admin.rc == 0
+  failed_when: false
+
+- name: Display RBAC assignment status
+  when:
+    - aks_state == 'present'
+    - aks_grant_group_rbac | default(false)
+  ansible.builtin.debug:
+    msg:
+      - "Admin Group: {{ aks_aad_admin_group_name | default('N/A') }}"
+      - "Group ID: {{ aks_aad_admin_group_id }}"
+      - "Contributor on {{ aks_resource_group }}: {{ 'Granted' if rbac_main_rg.rc == 0 else 'Already exists or failed' }}"
+      - "Reader on managed RG: {{ 'Granted' if rbac_node_rg.rc == 0 else 'Already exists or failed' }}"
+      - "AKS Cluster Admin: {{ 'Granted' if rbac_aks_admin.rc == 0 else 'Already exists or failed' }}"
+
 - name: Get AKS cluster credentials
   when: aks_state == 'present' and aks_get_credentials
   ansible.builtin.command: >
     az aks get-credentials
     --name {{ aks_cluster_name }}
     --resource-group {{ aks_resource_group }}
+    {{ '--subscription ' + azure_subscription_id if azure_subscription_id is defined and azure_subscription_id != '' else '' }}
     --overwrite-existing
   register: aks_credentials
   changed_when: "'Merged' in aks_credentials.stderr"
@@ -165,7 +254,10 @@
   failed_when: false
 
 - name: Display cluster connectivity
-  when: k8s_cluster_info is defined and k8s_cluster_info.rc == 0
+  when:
+    - k8s_cluster_info is defined
+    - k8s_cluster_info.rc is defined
+    - k8s_cluster_info.rc == 0
   ansible.builtin.debug:
     msg: "{{ k8s_cluster_info.stdout_lines }}"
 
@@ -177,6 +269,7 @@
         az aks delete
         --name {{ aks_cluster_name }}
         --resource-group {{ aks_resource_group }}
+        {{ '--subscription ' + azure_subscription_id if azure_subscription_id is defined and azure_subscription_id != '' else '' }}
         --yes
         --no-wait
       register: aks_delete_result
@@ -188,6 +281,7 @@
         az aks show
         --name {{ aks_cluster_name }}
         --resource-group {{ aks_resource_group }}
+        {{ '--subscription ' + azure_subscription_id if azure_subscription_id is defined and azure_subscription_id != '' else '' }}
       register: aks_delete_check
       until: aks_delete_check.rc != 0
       retries: 60
@@ -200,6 +294,7 @@
   ansible.builtin.command: >
     az group delete
     --name {{ aks_resource_group }}
+    {{ '--subscription ' + azure_subscription_id if azure_subscription_id is defined and azure_subscription_id != '' else '' }}
     --yes
     --no-wait
   register: rg_delete
@@ -213,4 +308,3 @@
     dest: "./aks_cluster_{{ aks_cluster_name }}_info.json"
     mode: '0644'
   delegate_to: localhost
-

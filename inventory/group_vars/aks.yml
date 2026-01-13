@@ -5,7 +5,7 @@
 aks_cluster_name: "obs-aks-cluster"
 aks_resource_group: "obs-aks-rg"
 aks_location: "eastus"
-aks_kubernetes_version: "1.28"
+aks_kubernetes_version: "1.32"
 
 # Node Pool Configuration
 aks_node_pool_name: "default"
@@ -24,9 +24,15 @@ aks_service_cidr: "10.0.0.0/16"
 aks_load_balancer_sku: "standard"
 
 # Authentication & Authorization
-aks_enable_rbac: true
+# Note: RBAC is always enabled by default in AKS (--enable-rbac flag removed)
 aks_enable_azure_rbac: true
 aks_enable_managed_identity: true
+
+# Entra ID (Azure AD) Admin Group Configuration
+# This group gets cluster admin access and Contributor rights on resource groups
+aks_aad_admin_group_name: "Ansible Site Reliability Engineers"
+aks_aad_admin_group_id: "d66acac7-1ea8-43c6-b0f4-f327a83dc913"
+aks_grant_group_rbac: true  # Grant Contributor access on resource groups
 
 # Features
 aks_enable_auto_scaling: true
@@ -35,7 +41,8 @@ aks_enable_monitoring: true
 aks_enable_pod_security_policy: false
 
 # Azure Configuration
-azure_subscription_id: ""  # Set via environment or override
+azure_profile: "infrastructure-dev"  # Profile name in ~/.azure/credentials
+azure_subscription_id: "4da397a2-cd45-42c4-b7f3-989b403d832a"  # From infrastructure-dev profile
 azure_tenant_id: ""        # Set via environment or override
 
 # Tags
@@ -46,7 +53,8 @@ aks_tags:
 
 # Add-ons
 aks_enable_http_application_routing: false
-aks_enable_azure_policy: true
+# Note: Azure Policy addon requires aks-preview extension, disabled for basic deployment
+aks_enable_azure_policy: false
 
 # Network Profile (optional - for advanced networking)
 aks_vnet_name: ""

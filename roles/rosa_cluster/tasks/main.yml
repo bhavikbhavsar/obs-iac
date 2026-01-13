@@ -100,10 +100,26 @@
       when: rosa_wait
       ansible.builtin.command: rosa describe cluster --cluster={{ rosa_cluster_name }} -o json
       register: rosa_status
-      until: (rosa_status.stdout | from_json).state == 'ready'
+      until: >-
+        rosa_status.rc == 0 and
+        rosa_status.stdout | length > 0 and
+        (rosa_status.stdout | from_json).state == 'ready'
       retries: "{{ (rosa_wait_timeout / 60) | int }}"
       delay: 60
       changed_when: false
+      failed_when: false
+
+    - name: Verify ROSA cluster reached ready state
+      ansible.builtin.fail:
+        msg: >-
+          ROSA cluster '{{ rosa_cluster_name }}' did not reach 'ready' state within timeout.
+          Last status: {{ (rosa_status.stdout | from_json).state | default('unknown') if rosa_status.stdout | length > 0 else 'no response' }}
+      when: >-
+        rosa_wait and (
+          rosa_status.rc != 0 or
+          rosa_status.stdout | length == 0 or
+          (rosa_status.stdout | from_json).state != 'ready'
+        )
 
 - name: Get ROSA cluster details
   when: rosa_state == 'present'
