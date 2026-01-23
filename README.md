@@ -49,15 +49,6 @@ ansible-galaxy collection install -r requirements.yml
 
 Edit the configuration files based on your requirements:
 
-#### For ROSA:
-Edit `group_vars/rosa.yml`:
-```yaml
-rosa_cluster_name: "your-cluster-name"
-rosa_region: "us-east-1"
-rosa_compute_nodes: 3
-# ... other variables
-```
-
 #### For AKS:
 Edit `group_vars/aks.yml`:
 ```yaml
@@ -68,15 +59,6 @@ aks_location: "eastus"
 ```
 
 ### 4. Authenticate with Cloud Providers
-
-#### AWS (for ROSA):
-```bash
-# Configure AWS credentials
-aws configure --profile default
-
-# Get your ROSA token from https://console.redhat.com/openshift/token
-export ROSA_TOKEN="your-rosa-token"
-```
 
 #### Azure (for AKS):
 ```bash
@@ -89,17 +71,6 @@ az account set --subscription "your-subscription-id"
 
 ## 📖 Usage
 
-### Deploy ROSA Cluster
-
-```bash
-# Deploy ROSA cluster
-ansible-playbook -i inventory/aws playbooks/deploy_rosa.yml
-
-# Deploy with custom variables
-ansible-playbook -i inventory/aws playbooks/deploy_rosa.yml \
-  -e "rosa_cluster_name=my-cluster" \
-  -e "rosa_region=us-west-2"
-```
 
 ### Deploy AKS Cluster
 
@@ -116,66 +87,13 @@ ansible-playbook -i inventory/azure playbooks/deploy_aks.yml \
 ### Delete Clusters
 
 ```bash
-# Delete ROSA cluster
-ansible-playbook -i inventory/aws playbooks/deploy_rosa.yml \
-  -e "rosa_state=absent"
-
 # Delete AKS cluster
 ansible-playbook -i inventory/azure playbooks/deploy_aks.yml \
   -e "aks_state=absent"
 ```
 
-## 📁 Project Structure
-
-```
-obs-iac/
-├── ansible.cfg                 # Ansible configuration
-├── requirements.txt            # Python dependencies
-├── requirements.yml            # Ansible Galaxy dependencies
-├── README.md                   # This file
-├── .gitignore                 # Git ignore patterns
-│
-├── inventory/                  # Inventory files
-│   ├── aws                    # AWS/ROSA inventory
-│   └── azure                  # Azure/AKS inventory
-│
-├── group_vars/                # Group variables
-│   ├── rosa.yml              # ROSA cluster configuration
-│   └── aks.yml               # AKS cluster configuration
-│
-├── playbooks/                 # Ansible playbooks
-│   ├── deploy_rosa.yml       # ROSA deployment playbook
-│   └── deploy_aks.yml        # AKS deployment playbook
-│
-└── roles/                     # Ansible roles
-    ├── rosa_cluster/         # ROSA cluster role
-    │   ├── defaults/
-    │   │   └── main.yml
-    │   └── tasks/
-    │       └── main.yml
-    │
-    └── aks_cluster/          # AKS cluster role
-        ├── defaults/
-        │   └── main.yml
-        └── tasks/
-            └── main.yml
-```
 
 ## ⚙️ Configuration
-
-### ROSA Configuration Options
-
-Key variables in `group_vars/rosa.yml`:
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `rosa_cluster_name` | Name of the ROSA cluster | `obs-rosa-cluster` |
-| `rosa_region` | AWS region | `us-east-1` |
-| `rosa_cluster_version` | OpenShift version | `4.14` |
-| `rosa_compute_machine_type` | EC2 instance type | `m5.xlarge` |
-| `rosa_compute_nodes` | Number of compute nodes | `3` |
-| `rosa_enable_autoscaling` | Enable autoscaling | `true` |
-| `rosa_multi_az` | Multi-AZ deployment | `true` |
 
 ### AKS Configuration Options
 
@@ -193,19 +111,6 @@ Key variables in `group_vars/aks.yml`:
 
 ## 🔍 Verification
 
-### Verify ROSA Cluster
-
-```bash
-# Check cluster status
-rosa describe cluster --cluster=obs-rosa-cluster
-
-# Get cluster API and console URLs
-rosa describe cluster --cluster=obs-rosa-cluster | grep -E "(API|Console)"
-
-# Create admin user
-rosa create admin --cluster=obs-rosa-cluster
-```
-
 ### Verify AKS Cluster
 
 ```bash
@@ -222,35 +127,10 @@ kubectl cluster-info
 kubectl get ns
 ```
 
-## 🔐 Security Considerations
-
-1. **Never commit credentials** to version control
-2. Use environment variables for sensitive data:
-   - `ROSA_TOKEN` for ROSA authentication
-   - AWS credentials via `~/.aws/credentials`
-   - Azure credentials via `az login`
-3. Enable RBAC on all clusters
-4. Use managed identities where possible
-5. Regularly rotate credentials
-6. Review and limit cluster permissions
-
 ## 🐛 Troubleshooting
 
-### ROSA Issues
 
-**Problem**: ROSA CLI not found
-```bash
-# Manually install ROSA CLI
-wget https://mirror.openshift.com/pub/openshift-v4/clients/rosa/latest/rosa-linux.tar.gz
-tar -xzf rosa-linux.tar.gz
-sudo mv rosa /usr/local/bin/
-```
 
-**Problem**: AWS quota exceeded
-```bash
-# Check AWS service quotas
-aws service-quotas list-service-quotas --service-code ec2
-```
 
 ### AKS Issues
 
@@ -288,30 +168,6 @@ After deploying your clusters, you can:
    - Configure cluster monitoring
    - Set up alerts
    - Create dashboards
-
-## 🤝 Contributing
-
-Contributions are welcome! Please follow these steps:
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Test thoroughly
-5. Submit a pull request
-
-## 📄 License
-
-[Specify your license here]
-
-## 📞 Support
-
-For issues and questions:
-- Open an issue in this repository
-- Contact the infrastructure team
-
-## 🔄 Updates
-
-Check the commit history for recent changes and updates to the infrastructure code.
 
 ---
 
